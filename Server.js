@@ -1,73 +1,144 @@
 import { ApolloServer } from "@apollo/server";
-import { startStandaloneServer } from "@apollo/server/standalone";
 import { randomBytes } from "crypto";
-import { User, author } from "./testdata.js";
+import Quotes from "./models/quotes.js";
+import User from "./models/User.js";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import { error } from "console";
 
-const typeDefs = `#graphql 
+export const typeDefs = `#graphql 
     type Query{
         User:[Users]
         author:[Author]
-        user(id:ID!):Users
-        Author(id:ID!):[Author]
+        user(_id:ID!):Users
+        Author(_id:ID!):[QuotewithUserName]
+       
     }
+    type QuotewithUserName{
+      _id:ID
+      name:String
+      quote:String
+      author:idname
+    }
+   type idname{
+    _id: String
+    name:String
+   }
     type Users{
-        id:ID!
+        _id:ID
         name:String
         email:String
-        password:String!
+        password:String
         quote:[Author]
     }
     type Author{
-        by:ID
-        name: String
+        _id:ID
+        quote: String
+        author:ID
+        
+    }
+    type Token{
+      token:String
+      user:Users
     }
     type Mutation{
       addUser(user:newUser):Users
+      login(userlogin:signIn):Token
+      createQuote(quote:String):Author
+    }
+    input signIn{
+     
+      email:String!
+      password:String!
     }
     input newUser{
       name:String!
       email:String
       password:String
     }
+   
 `;
-const resolvers = {
+export const resolvers = {
   Query: {
-    User: () => {
-      return User;
+    User: async () => {
+      return await User.find();
     },
-    author: () => {
-      return author;
+    author: async () => {
+      return await Quotes.find();
     },
-    user: (_, user) => User.find((res) => res.id === user.id),
-    Author: (_, { id }) => author.filter((res) => res.by === id),
+    user: async (_, { _id }) => await User.findOne({ _id }),
+    Author: async (_, { _id }) => {
+      try {
+        return await Quotes.find({ _id }).populate("author");
+      } catch (error) {
+        console.log(error.message);
+      }
+    },
   },
   Users: {
     quote: (ur) => {
-      if (author.filter((el) => el.by === ur.id).length <= 0) {
+      if (!User.find({ _id: ur._id })) {
         return;
       }
-      const result = author.filter((el) => el.by === ur.id);
+      const result = Quotes.find({ _id: ur._id });
       return result;
     },
   },
   Mutation: {
-    addUser(_, { user }) {
-      const id = randomBytes(4).toString("hex");
-      User.push({
-        id,
-        ...user,
+    async addUser(_, { user }) {
+      if (!User.find({ email: user.email })) {
+        throw new Error("User already exits ");
+      }
+      console.log("mutation called");
+      //encrypt password using bcrypt?
+      // generate a webtoken
+      //save the token in db
+      //return the jwt
+
+      let password = await bcrypt.hash(user.password, 10);
+      let users = await User.create({
+        name: user.name,
+        email: user.email,
+        password,
       });
-      return User.find((res) => res.id === id);
+
+      return users;
+    },
+    async login(_, { userlogin }) {
+      if (!User.findOne({ email: userlogin.email })) {
+        throw new Error("user will this email and password is not found");
+      }
+
+      let find = await User.findOne({
+        email: userlogin.email,
+      });
+      let checkPassword = await bcrypt.compare(
+        userlogin.password,
+        find.password
+      );
+      //how to change status on error in graphql?
+      if (!checkPassword) {
+        throw new Error("Error please check your email or password");
+      }
+      let token = jwt.sign({ id: find._id }, process.env.JWT_SECRET);
+      return { token, user: find };
+    },
+    async createQuote(_, { quote }, req) {
+      try {
+        let id = req.verify();
+        if (!id) {
+          return;
+        }
+        let user = await User.findById(id);
+        const quoteData = await Quotes.create({
+          quote: quote,
+          author: id,
+        });
+        return quoteData;
+      } catch (error) {
+        console.log(error.message);
+        throw new Error(`Something went wrong${error.message}`);
+      }
     },
   },
 };
-const server = new ApolloServer({
-  typeDefs,
-  resolvers,
-});
-
-const { url } = await startStandaloneServer(server, {
-  listen: { port: 4000 },
-});
-
-console.log(`🚀  Server ready at: ${url}`);
